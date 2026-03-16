@@ -9,12 +9,19 @@ export const AuthProvider = ({ children }) => {
 
   useEffect(() => {
     const stored = localStorage.getItem('smartuniUser');
-    if (stored) setUser(JSON.parse(stored));
+    if (stored) {
+      try {
+        setUser(JSON.parse(stored));
+      } catch {
+        localStorage.removeItem('smartuniUser');
+      }
+    }
     setLoading(false);
   }, []);
 
-  const login = async (email, password) => {
-    const { data } = await loginUser({ email, password });
+  // ── login accepts reg number OR email ─────────────
+  const login = async (loginId, password) => {
+    const { data } = await loginUser({ login: loginId, password });
     localStorage.setItem('smartuniUser', JSON.stringify(data));
     setUser(data);
     return data;
@@ -32,16 +39,17 @@ export const AuthProvider = ({ children }) => {
     setUser(null);
   };
 
-  const isAdmin   = user?.role === 'admin';
-  const isFaculty = user?.role === 'faculty';
-  const isStudent = user?.role === 'student';
-  const isStaff   = user?.role === 'staff';
-
   return (
     <AuthContext.Provider value={{
-      user, login, register, logout,
-      isAdmin, isFaculty, isStudent, isStaff,
+      user,
+      login,
+      register,
+      logout,
       loading,
+      isAdmin:   user?.role === 'admin',
+      isFaculty: user?.role === 'faculty',
+      isStudent: user?.role === 'student',
+      isStaff:   user?.role === 'staff',
     }}>
       {children}
     </AuthContext.Provider>

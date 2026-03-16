@@ -7,19 +7,27 @@ const Login = () => {
   const [form,     setForm]     = useState({ login: '', password: '' });
   const [loading,  setLoading]  = useState(false);
   const [showPass, setShowPass] = useState(false);
-  const { login }               = useAuth();
+  const { login: doLogin }      = useAuth();
   const navigate                = useNavigate();
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    if (!form.login.trim()) {
+      toast.error('Please enter your registration number or email');
+      return;
+    }
+    if (!form.password) {
+      toast.error('Please enter your password');
+      return;
+    }
     try {
       setLoading(true);
-      const user = await login(form.login, form.password);
+      const user = await doLogin(form.login.trim(), form.password);
       toast.success(`Welcome back, ${user.name}!`);
       const routes = { admin: '/admin', faculty: '/faculty', student: '/student', staff: '/admin' };
       navigate(routes[user.role] || '/');
     } catch (err) {
-      toast.error(err.response?.data?.message || 'Login failed');
+      toast.error(err.response?.data?.message || 'Invalid credentials');
     } finally {
       setLoading(false);
     }
@@ -46,7 +54,7 @@ const Login = () => {
           />
 
           <label style={s.label}>Password</label>
-          <div style={{ position: 'relative', marginBottom: '20px' }}>
+          <div style={{ position: 'relative', marginBottom: '16px' }}>
             <input
               style={{ ...s.input, marginBottom: 0, paddingRight: '44px' }}
               type={showPass ? 'text' : 'password'}
@@ -58,13 +66,12 @@ const Login = () => {
             <button
               type="button"
               onClick={() => setShowPass(!showPass)}
-              style={{ position: 'absolute', right: '12px', top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', fontSize: '16px' }}
+              style={s.eyeBtn}
             >
               {showPass ? '🙈' : '👁️'}
             </button>
           </div>
 
-          {/* Hint box */}
           <div style={s.hintBox}>
             <p style={s.hintTitle}>💡 Login Options</p>
             <p style={s.hintText}>Students: use your registration number (e.g. T26-03-00001)</p>
@@ -82,7 +89,6 @@ const Login = () => {
         </p>
       </div>
 
-      {/* Side panel */}
       <div style={s.side}>
         <h2 style={s.sideTitle}>Welcome Back</h2>
         <p style={s.sideSub}>
@@ -117,6 +123,7 @@ const s = {
   sub:       { fontSize: '14px', color: '#64748b', marginTop: '4px' },
   label:     { display: 'block', fontSize: '12px', fontWeight: '600', color: '#1e3c72', marginBottom: '5px', textTransform: 'uppercase', letterSpacing: '0.5px' },
   input:     { width: '100%', padding: '11px 14px', border: '1.5px solid #e2e8f0', borderRadius: '8px', fontSize: '14px', marginBottom: '16px', outline: 'none', boxSizing: 'border-box', color: '#1e3c72', background: '#f8fafc' },
+  eyeBtn:    { position: 'absolute', right: '12px', top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', fontSize: '16px' },
   hintBox:   { background: '#f0f9ff', border: '1px solid #bae6fd', borderRadius: '8px', padding: '12px 14px', marginBottom: '16px' },
   hintTitle: { fontSize: '12px', fontWeight: '700', color: '#0369a1', marginBottom: '5px' },
   hintText:  { fontSize: '11px', color: '#0284c7', marginBottom: '2px' },

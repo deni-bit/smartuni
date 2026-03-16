@@ -9,13 +9,16 @@ const generateToken = require('../utils/generateToken');
 const isValidEmail = (email) =>
   /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 
-// ── Generate unique IDs ───────────────────────────────
-const generateStudentId = async () => {
+// ── Generate Registration Number: T26-03-00001 ────────
+const generateRegNo = async () => {
   const year  = new Date().getFullYear().toString().slice(-2);
+  const month = String(new Date().getMonth() + 1).padStart(2, '0');
   const count = await Student.countDocuments();
-  return `STU${year}${String(count + 1).padStart(4, '0')}`;
+  const seq   = String(count + 1).padStart(5, '0');
+  return `T${year}-${month}-${seq}`;
 };
 
+// ── Generate Faculty ID ───────────────────────────────
 const generateFacultyId = async () => {
   const year  = new Date().getFullYear().toString().slice(-2);
   const count = await Faculty.countDocuments();
@@ -24,7 +27,7 @@ const generateFacultyId = async () => {
 
 // @desc    Register user
 // @route   POST /api/auth/register
-// @access  Public (student) / Admin only (faculty/admin/staff)
+// @access  Public (student) / Admin (faculty/admin/staff)
 const registerUser = asyncHandler(async (req, res) => {
   const {
     name, email, password, role,
@@ -32,7 +35,6 @@ const registerUser = asyncHandler(async (req, res) => {
     designation, qualification,
   } = req.body;
 
-  // Validation
   if (!name || !email || !password) {
     res.status(400);
     throw new Error('Name, email and password are required');
@@ -48,8 +50,8 @@ const registerUser = asyncHandler(async (req, res) => {
     throw new Error('Password must be at least 6 characters');
   }
 
-  // Only admin can create faculty/admin/staff accounts
   const assignedRole = role || 'student';
+
   if (['faculty', 'admin', 'staff'].includes(assignedRole)) {
     if (!req.user || req.user.role !== 'admin') {
       res.status(403);
@@ -57,14 +59,12 @@ const registerUser = asyncHandler(async (req, res) => {
     }
   }
 
-  // Check duplicate
   const userExists = await User.findOne({ email: email.toLowerCase() });
   if (userExists) {
     res.status(400);
     throw new Error('An account with this email already exists');
   }
 
-  // Create user
   const user = await User.create({
     name:     name.trim(),
     email:    email.toLowerCase().trim(),
@@ -73,7 +73,9 @@ const registerUser = asyncHandler(async (req, res) => {
     phone:    phone || '',
   });
 
-  // Create role-specific profile
+  let regNo = null;
+
+  // ── Create student profile with reg number ────────
   if (assignedRole === 'student') {
     if (!departmentId) {
       await user.deleteOne();
@@ -88,16 +90,19 @@ const registerUser = asyncHandler(async (req, res) => {
       throw new Error('Department not found');
     }
 
-    const studentId = await generateStudentId();
+    regNo = await generateRegNo();
+
     await Student.create({
-      user:       user._id,
-      studentId,
-      department: departmentId,
-      year:       year       || 1,
-      semester:   semester   || 1,
+      user:           user._id,
+      studentId:      regNo,
+      registrationNo: regNo,
+      department:     departmentId,
+      year:           year     || 1,
+      semester:       semester || 1,
     });
   }
 
+  // ── Create faculty profile ────────────────────────
   if (assignedRole === 'faculty') {
     if (!departmentId) {
       await user.deleteOne();
@@ -125,35 +130,58 @@ const registerUser = asyncHandler(async (req, res) => {
   const token = generateToken(user._id, user.role);
 
   res.status(201).json({
-    _id:   user._id,
-    name:  user.name,
-    email: user.email,
-    role:  user.role,
+    _id:            user._id,
+    name:           user.name,
+    email:          user.email,
+    role:           user.role,
+    registrationNo: regNo,
     token,
+    message: regNo
+      ? `Registration successful! Your registration number is ${regNo}. Use it to login.`
+      : 'Account created successfully',
   });
 });
 
-// @desc    Login user
+// @desc    Login — accepts email OR registration number
 // @route   POST /api/auth/login
 // @access  Public
 const loginUser = asyncHandler(async (req, res) => {
-  const { email, password } = req.body;
+  const { login, password, email } = req.body;
 
-  if (!email || !password) {
+  // Accept either 'login' field (reg no or email) or legacy 'email' field
+  const loginId = login || email;
+
+  if (!loginId || !password) {
     res.status(400);
-    throw new Error('Please provide email and password');
+    throw new Error('Please provide your login ID and password');
   }
 
-  if (!isValidEmail(email)) {
-    res.status(400);
-    throw new Error('Invalid email format');
-  }
+  let user = null;
 
-  const user = await User.findOne({ email: email.toLowerCase() });
+  // ── Check if it looks like a registration number ──
+  const isRegNo = /^T\d{2}-\d{2}-\d{5}$/.test(loginId.trim().toUpperCase());
+
+  if (isRegNo) {
+    // Find student by registration number
+    const student = await Student.findOne({
+      studentId: loginId.trim().toUpperCase(),
+    }).populate('user');
+
+    if (student?.user) {
+      user = await User.findById(student.user._id);
+    }
+  } else {
+    // Login by email
+    if (!isValidEmail(loginId)) {
+      res.status(400);
+      throw new Error('Please provide a valid email or registration number');
+    }
+    user = await User.findOne({ email: loginId.toLowerCase() });
+  }
 
   if (!user || !(await user.matchPassword(password))) {
     res.status(401);
-    throw new Error('Invalid email or password');
+    throw new Error('Invalid credentials');
   }
 
   if (!user.isActive) {
@@ -161,11 +189,10 @@ const loginUser = asyncHandler(async (req, res) => {
     throw new Error('Your account has been deactivated. Contact admin.');
   }
 
-  // Update last login
   user.lastLogin = new Date();
   await user.save();
 
-  // Get role-specific profile
+  // Get role profile
   let profile = null;
   if (user.role === 'student') {
     profile = await Student.findOne({ user: user._id })
@@ -229,11 +256,10 @@ const updateProfile = asyncHandler(async (req, res) => {
   if (name)  user.name  = name.trim();
   if (phone) user.phone = phone;
 
-  // Change password
   if (newPassword) {
     if (!currentPassword) {
       res.status(400);
-      throw new Error('Current password is required to set a new password');
+      throw new Error('Current password is required');
     }
     const isMatch = await user.matchPassword(currentPassword);
     if (!isMatch) {
@@ -270,10 +296,10 @@ const changePassword = asyncHandler(async (req, res) => {
 
   if (!currentPassword || !newPassword) {
     res.status(400);
-    throw new Error('Both current and new passwords are required');
+    throw new Error('Both passwords are required');
   }
 
-  const user = await User.findById(req.user._id);
+  const user    = await User.findById(req.user._id);
   const isMatch = await user.matchPassword(currentPassword);
 
   if (!isMatch) {

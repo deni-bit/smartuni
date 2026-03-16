@@ -1,121 +1,136 @@
-import { useState } from 'react'
-import reactLogo from './assets/react.svg'
-import viteLogo from './assets/vite.svg'
-import heroImg from './assets/hero.png'
-import './App.css'
+import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
+import { ToastContainer } from 'react-toastify';
+import 'react-toastify/dist/ReactToastify.css';
+
+import { AuthProvider } from './context/AuthContext';
+import ProtectedRoute   from './components/ProtectedRoute';
+
+// ── Public ────────────────────────────────────────────
+import Landing  from './pages/Landing';
+import Login    from './pages/Login';
+import Register from './pages/Register';
+
+// ── Student ───────────────────────────────────────────
+import StudentDashboard from './pages/student/StudentDashboard';
+import MyCourses        from './pages/student/MyCourses';
+import Attendance       from './pages/student/Attendance';
+import Grades           from './pages/student/Grades';
+import Fees             from './pages/student/Fees';
+
+// ── Faculty ───────────────────────────────────────────
+import FacultyDashboard from './pages/faculty/FacultyDashboard';
+import ManageCoursesFac from './pages/faculty/ManageCourses';
+import TakeAttendance   from './pages/faculty/TakeAttendance';
+import SubmitGrades     from './pages/faculty/SubmitGrades';
+
+// ── Admin ─────────────────────────────────────────────
+import AdminDashboard   from './pages/admin/AdminDashboard';
+import ManageUsers      from './pages/admin/ManageUsers';
+import ManageDepartments from './pages/admin/ManageDepartments';
+import ManageCourses    from './pages/admin/ManageCourses';
+import FeeManagement    from './pages/admin/FeeManagement';
+import Reports          from './pages/admin/Reports';
 
 function App() {
-  const [count, setCount] = useState(0)
-
   return (
-    <>
-      <section id="center">
-        <div className="hero">
-          <img src={heroImg} className="base" width="170" height="179" alt="" />
-          <img src={reactLogo} className="framework" alt="React logo" />
-          <img src={viteLogo} className="vite" alt="Vite logo" />
-        </div>
-        <div>
-          <h1>Get started</h1>
-          <p>
-            Edit <code>src/App.jsx</code> and save to test <code>HMR</code>
-          </p>
-        </div>
-        <button
-          className="counter"
-          onClick={() => setCount((count) => count + 1)}
-        >
-          Count is {count}
-        </button>
-      </section>
+    <AuthProvider>
+      <Router>
+        <Routes>
 
-      <div className="ticks"></div>
+          {/* ── Public ── */}
+          <Route path="/"         element={<Landing  />} />
+          <Route path="/login"    element={<Login    />} />
+          <Route path="/register" element={<Register />} />
 
-      <section id="next-steps">
-        <div id="docs">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#documentation-icon"></use>
-          </svg>
-          <h2>Documentation</h2>
-          <p>Your questions, answered</p>
-          <ul>
-            <li>
-              <a href="https://vite.dev/" target="_blank">
-                <img className="logo" src={viteLogo} alt="" />
-                Explore Vite
-              </a>
-            </li>
-            <li>
-              <a href="https://react.dev/" target="_blank">
-                <img className="button-icon" src={reactLogo} alt="" />
-                Learn more
-              </a>
-            </li>
-          </ul>
-        </div>
-        <div id="social">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#social-icon"></use>
-          </svg>
-          <h2>Connect with us</h2>
-          <p>Join the Vite community</p>
-          <ul>
-            <li>
-              <a href="https://github.com/vitejs/vite" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#github-icon"></use>
-                </svg>
-                GitHub
-              </a>
-            </li>
-            <li>
-              <a href="https://chat.vite.dev/" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#discord-icon"></use>
-                </svg>
-                Discord
-              </a>
-            </li>
-            <li>
-              <a href="https://x.com/vite_js" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#x-icon"></use>
-                </svg>
-                X.com
-              </a>
-            </li>
-            <li>
-              <a href="https://bsky.app/profile/vite.dev" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#bluesky-icon"></use>
-                </svg>
-                Bluesky
-              </a>
-            </li>
-          </ul>
-        </div>
-      </section>
+          {/* ── Student ── */}
+          <Route path="/student" element={
+            <ProtectedRoute studentOnly>
+              <StudentDashboard />
+            </ProtectedRoute>
+          } />
+          <Route path="/student/courses" element={
+            <ProtectedRoute studentOnly>
+              <MyCourses />
+            </ProtectedRoute>
+          } />
+          <Route path="/student/attendance" element={
+            <ProtectedRoute studentOnly>
+              <Attendance />
+            </ProtectedRoute>
+          } />
+          <Route path="/student/grades" element={
+            <ProtectedRoute studentOnly>
+              <Grades />
+            </ProtectedRoute>
+          } />
+          <Route path="/student/fees" element={
+            <ProtectedRoute studentOnly>
+              <Fees />
+            </ProtectedRoute>
+          } />
 
-      <div className="ticks"></div>
-      <section id="spacer"></section>
-    </>
-  )
+          {/* ── Faculty ── */}
+          <Route path="/faculty" element={
+            <ProtectedRoute facultyOnly>
+              <FacultyDashboard />
+            </ProtectedRoute>
+          } />
+          <Route path="/faculty/courses" element={
+            <ProtectedRoute facultyOnly>
+              <ManageCoursesFac />
+            </ProtectedRoute>
+          } />
+          <Route path="/faculty/attendance" element={
+            <ProtectedRoute facultyOnly>
+              <TakeAttendance />
+            </ProtectedRoute>
+          } />
+          <Route path="/faculty/grades" element={
+            <ProtectedRoute facultyOnly>
+              <SubmitGrades />
+            </ProtectedRoute>
+          } />
+
+          {/* ── Admin ── */}
+          <Route path="/admin" element={
+            <ProtectedRoute adminOnly>
+              <AdminDashboard />
+            </ProtectedRoute>
+          } />
+          <Route path="/admin/users" element={
+            <ProtectedRoute adminOnly>
+              <ManageUsers />
+            </ProtectedRoute>
+          } />
+          <Route path="/admin/departments" element={
+            <ProtectedRoute adminOnly>
+              <ManageDepartments />
+            </ProtectedRoute>
+          } />
+          <Route path="/admin/courses" element={
+            <ProtectedRoute adminOnly>
+              <ManageCourses />
+            </ProtectedRoute>
+          } />
+          <Route path="/admin/fees" element={
+            <ProtectedRoute adminOnly>
+              <FeeManagement />
+            </ProtectedRoute>
+          } />
+          <Route path="/admin/reports" element={
+            <ProtectedRoute adminOnly>
+              <Reports />
+            </ProtectedRoute>
+          } />
+
+          {/* ── Catch all ── */}
+          <Route path="*" element={<Navigate to="/" replace />} />
+
+        </Routes>
+        <ToastContainer position="top-right" autoClose={3000} />
+      </Router>
+    </AuthProvider>
+  );
 }
 
-export default App
+export default App;

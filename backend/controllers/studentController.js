@@ -7,6 +7,32 @@ const Attendance   = require('../models/Attendance');
 const Fee          = require('../models/Fee');
 const Notification = require('../models/Notification');
 
+// ── GPA helpers (5.0 scale) ───────────────────────────
+const calcGPA = (grades) => {
+  const approved = grades.filter(g =>
+    g.status === 'approved' && !['I','E'].includes(g.letterGrade)
+  );
+  let totalPoints = 0, totalCredits = 0;
+  for (const g of approved) {
+    const cr = g.course?.credits || 3;
+    totalPoints  += g.gradePoints * cr;
+    totalCredits += cr;
+  }
+  return {
+    gpa:          totalCredits > 0 ? parseFloat((totalPoints / totalCredits).toFixed(2)) : 0,
+    totalCredits,
+  };
+};
+
+const getGpaClass = (gpa) => {
+  if (gpa >= 4.4) return 'First Class';
+  if (gpa >= 3.5) return 'Upper Second';
+  if (gpa >= 2.7) return 'Lower Second';
+  if (gpa >= 2.0) return 'Pass';
+  if (gpa >= 1.0) return 'Supplementary';
+  return 'Fail';
+};
+
 // @desc    Get all students
 // @route   GET /api/students
 // @access  Admin/Faculty
@@ -24,7 +50,6 @@ const getAllStudents = asyncHandler(async (req, res) => {
     .populate('department', 'name code')
     .sort({ studentId: 1 });
 
-  // Search by name or student ID
   if (search) {
     const q = search.toLowerCase();
     students = students.filter(s =>
@@ -50,7 +75,6 @@ const getStudentById = asyncHandler(async (req, res) => {
     throw new Error('Student not found');
   }
 
-  // Students can only view their own profile
   if (
     req.user.role === 'student' &&
     student.user._id.toString() !== req.user._id.toString()
@@ -75,8 +99,11 @@ const getMyProfile = asyncHandler(async (req, res) => {
     throw new Error('Student profile not found');
   }
 
-  // Enrollments
-  const enrollments = await Enrollment.find({ student: student._id })
+  // Current semester enrollments only
+  const enrollments = await Enrollment.find({
+    student: student._id,
+    status:  'enrolled',
+  })
     .populate({
       path: 'course',
       populate: [
@@ -91,13 +118,14 @@ const getMyProfile = asyncHandler(async (req, res) => {
     isRead:    false,
   }).sort({ createdAt: -1 }).limit(10);
 
-  // Fee summary
+  // Fee summary — all fees
   const fees = await Fee.find({ student: student._id })
     .sort({ createdAt: -1 });
 
-  const totalFees    = fees.reduce((sum, f) => sum + f.amount, 0);
-  const totalPaid    = fees.reduce((sum, f) => sum + f.paid,   0);
-  const totalBalance = fees.reduce((sum, f) => sum + f.balance,0);
+  const totalFees    = fees.reduce((s, f) => s + f.amount,  0);
+  const totalPaid    = fees.reduce((s, f) => s + f.paid,    0);
+  const totalBalance = fees.reduce((s, f) => s + f.balance, 0);
+  const overdueCount = fees.filter(f => f.status === 'overdue').length;
 
   res.json({
     student,
@@ -107,6 +135,7 @@ const getMyProfile = asyncHandler(async (req, res) => {
       totalFees,
       totalPaid,
       totalBalance,
+      overdueCount,
       records: fees,
     },
   });
@@ -131,7 +160,6 @@ const updateStudent = asyncHandler(async (req, res) => {
     throw new Error('Access denied');
   }
 
-  // Admin can update everything, students can only update address/guardian
   let allowedFields = {};
   if (req.user.role === 'admin') {
     const { year, semester, status, department, guardianName, guardianPhone, address } = req.body;
@@ -141,7 +169,6 @@ const updateStudent = asyncHandler(async (req, res) => {
     allowedFields = { guardianName, guardianPhone, address };
   }
 
-  // Remove undefined fields
   Object.keys(allowedFields).forEach(k =>
     allowedFields[k] === undefined && delete allowedFields[k]
   );
@@ -156,7 +183,7 @@ const updateStudent = asyncHandler(async (req, res) => {
   res.json({ success: true, student: updated });
 });
 
-// @desc    Get student grades
+// @desc    Get student grades with full history
 // @route   GET /api/students/:id/grades
 // @access  Admin/Faculty/Own student
 const getStudentGrades = asyncHandler(async (req, res) => {
@@ -177,24 +204,39 @@ const getStudentGrades = asyncHandler(async (req, res) => {
 
   const grades = await Grade.find({ student: student._id })
     .populate('course', 'title code credits semester year')
-    .sort({ academicYear: -1, semester: -1 });
+    .sort({ semester: 1 });
 
-  // Calculate GPA
-  const completed = grades.filter(g => g.status === 'approved' && g.letterGrade !== 'I');
-  let totalPoints  = 0;
-  let totalCredits = 0;
+  const { gpa, totalCredits } = calcGPA(grades);
 
-  for (const g of completed) {
-    const credits  = g.course?.credits || 0;
-    totalPoints   += g.gradePoints * credits;
-    totalCredits  += credits;
+  // Grade distribution
+  const dist = { A: 0, 'B+': 0, B: 0, C: 0, D: 0, E: 0 };
+  const approved = grades.filter(g => g.status === 'approved');
+  for (const g of approved) {
+    if (dist[g.letterGrade] !== undefined) dist[g.letterGrade]++;
   }
 
-  const gpa = totalCredits > 0
-    ? parseFloat((totalPoints / totalCredits).toFixed(2))
-    : 0;
+  // Supplementary courses
+  const supplementary = approved.filter(g => g.letterGrade === 'D');
+  const failed        = approved.filter(g => g.letterGrade === 'E');
 
-  res.json({ grades, gpa, totalCredits });
+  // Group by semester
+  const bySemester = {};
+  for (const g of grades) {
+    const key = `Semester ${g.semester}`;
+    if (!bySemester[key]) bySemester[key] = [];
+    bySemester[key].push(g);
+  }
+
+  res.json({
+    grades,
+    gpa,
+    totalCredits,
+    gpaClass:      getGpaClass(gpa),
+    distribution:  dist,
+    supplementary,
+    failed,
+    bySemester,
+  });
 });
 
 // @desc    Get student attendance summary
@@ -220,7 +262,6 @@ const getStudentAttendance = asyncHandler(async (req, res) => {
     .populate('course', 'title code')
     .sort({ date: -1 });
 
-  // Summary per course
   const summary = {};
   for (const record of attendance) {
     const courseId = record.course?._id?.toString();
@@ -228,26 +269,26 @@ const getStudentAttendance = asyncHandler(async (req, res) => {
 
     if (!summary[courseId]) {
       summary[courseId] = {
-        course:   record.course,
-        total:    0,
-        present:  0,
-        absent:   0,
-        late:     0,
-        excused:  0,
+        course:     record.course,
+        total:      0,
+        present:    0,
+        absent:     0,
+        late:       0,
+        excused:    0,
         percentage: 0,
       };
     }
-
     summary[courseId].total++;
     summary[courseId][record.status]++;
   }
 
-  // Calculate percentage
   for (const key of Object.keys(summary)) {
     const s = summary[key];
     s.percentage = s.total > 0
       ? parseFloat(((s.present + s.excused) / s.total * 100).toFixed(1))
       : 0;
+    // Flag low attendance
+    s.lowAttendance = s.percentage < 75;
   }
 
   res.json({
@@ -278,9 +319,9 @@ const getStudentFees = asyncHandler(async (req, res) => {
   const fees = await Fee.find({ student: student._id })
     .sort({ createdAt: -1 });
 
-  const totalFees    = fees.reduce((sum, f) => sum + f.amount,  0);
-  const totalPaid    = fees.reduce((sum, f) => sum + f.paid,    0);
-  const totalBalance = fees.reduce((sum, f) => sum + f.balance, 0);
+  const totalFees    = fees.reduce((s, f) => s + f.amount,  0);
+  const totalPaid    = fees.reduce((s, f) => s + f.paid,    0);
+  const totalBalance = fees.reduce((s, f) => s + f.balance, 0);
 
   res.json({ fees, totalFees, totalPaid, totalBalance });
 });

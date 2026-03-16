@@ -6,26 +6,60 @@ const Faculty      = require('../models/Faculty');
 const Enrollment   = require('../models/Enrollment');
 const Notification = require('../models/Notification');
 
+// ── Helpers ───────────────────────────────────────────
+const calcGPA = (grades) => {
+  const approved = grades.filter(g =>
+    g.status === 'approved' && !['I','E'].includes(g.letterGrade)
+  );
+  let totalPoints = 0, totalCredits = 0;
+  for (const g of approved) {
+    const cr = g.course?.credits || 3;
+    totalPoints  += g.gradePoints * cr;
+    totalCredits += cr;
+  }
+  return {
+    gpa:          totalCredits > 0 ? parseFloat((totalPoints / totalCredits).toFixed(2)) : 0,
+    totalCredits,
+  };
+};
+
+const getGpaClass = (gpa) => {
+  if (gpa >= 4.4) return 'First Class';
+  if (gpa >= 3.5) return 'Upper Second';
+  if (gpa >= 2.7) return 'Lower Second';
+  if (gpa >= 2.0) return 'Pass';
+  if (gpa >= 1.0) return 'Supplementary';
+  return 'Fail';
+};
+
+// Tanzania grading reference
+const GRADE_SCALE = [
+  { grade: 'A',  min: 70, max: 100, points: 5.0, label: 'Excellent',     action: null            },
+  { grade: 'B+', min: 60, max: 69,  points: 4.0, label: 'Very Good',     action: null            },
+  { grade: 'B',  min: 50, max: 59,  points: 3.0, label: 'Good',          action: null            },
+  { grade: 'C',  min: 40, max: 49,  points: 2.0, label: 'Satisfactory',  action: null            },
+  { grade: 'D',  min: 35, max: 39,  points: 1.0, label: 'Supplementary', action: 'Repeat Exam'   },
+  { grade: 'E',  min: 0,  max: 34,  points: 0.0, label: 'Fail',          action: 'Repeat Course' },
+];
+
 // @desc    Submit grades for a course
 // @route   POST /api/grades/submit
 // @access  Faculty/Admin
 const submitGrades = asyncHandler(async (req, res) => {
   const { courseId, academicYear, semester, grades } = req.body;
 
-  // grades = [{ studentId, enrollmentId, assignment, midterm, finalExam, remarks }]
   if (!courseId || !grades || !Array.isArray(grades)) {
     res.status(400);
     throw new Error('Course ID and grades array are required');
   }
 
-  const course  = await Course.findById(courseId);
+  const course = await Course.findById(courseId);
   if (!course) {
     res.status(404);
     throw new Error('Course not found');
   }
 
-  const results  = [];
-  const errors   = [];
+  const results = [], errors = [];
 
   for (const g of grades) {
     const { studentId, enrollmentId, assignment, midterm, finalExam, remarks } = g;
@@ -37,11 +71,11 @@ const submitGrades = asyncHandler(async (req, res) => {
           student:      studentId,
           course:       courseId,
           enrollment:   enrollmentId,
-          semester:     semester || course.semester,
+          semester:     semester     || course.semester,
           academicYear: academicYear || '2025/2026',
-          assignment:   Number(assignment)  || 0,
-          midterm:      Number(midterm)     || 0,
-          finalExam:    Number(finalExam)   || 0,
+          assignment:   Number(assignment) || 0,
+          midterm:      Number(midterm)    || 0,
+          finalExam:    Number(finalExam)  || 0,
           status:       'submitted',
           submittedBy:  req.user._id,
           remarks:      remarks || '',
@@ -51,14 +85,17 @@ const submitGrades = asyncHandler(async (req, res) => {
 
       results.push(grade);
 
-      // Notify student
-      const student = await Student.findById(studentId).populate('user', '_id name');
+      // Build notification message based on grade
+      const gradeInfo = GRADE_SCALE.find(s => s.grade === grade.letterGrade);
+      const actionMsg = gradeInfo?.action ? ` Action required: ${gradeInfo.action}.` : '';
+
+      const student = await Student.findById(studentId).populate('user', '_id');
       if (student?.user) {
         await Notification.create({
           recipient: student.user._id,
           title:     'Grades Submitted',
-          message:   `Your grades for ${course.title} have been submitted. Letter Grade: ${grade.letterGrade}`,
-          type:      'grade',
+          message:   `Your grade for ${course.title}: ${grade.letterGrade} (${grade.totalMarks}/100) — ${gradeInfo?.label || ''}.${actionMsg}`,
+          type:      grade.letterGrade === 'D' || grade.letterGrade === 'E' ? 'warning' : 'grade',
           createdBy: req.user._id,
         });
       }
@@ -68,10 +105,11 @@ const submitGrades = asyncHandler(async (req, res) => {
   }
 
   res.status(201).json({
-    success:  true,
-    message:  `Grades submitted for ${results.length} students`,
+    success:   true,
+    message:   `Grades submitted for ${results.length} students`,
     submitted: results.length,
     errors,
+    scale:     GRADE_SCALE,
   });
 });
 
@@ -91,22 +129,41 @@ const getCourseGrades = asyncHandler(async (req, res) => {
   if (academicYear) filter.academicYear = academicYear;
 
   const grades = await Grade.find(filter)
-    .populate({
-      path: 'student',
-      populate: { path: 'user', select: 'name email' },
-    })
-    .sort({ 'student.user.name': 1 });
+    .populate({ path: 'student', populate: { path: 'user', select: 'name email' } })
+    .sort({ totalMarks: -1 });
 
-  // Stats
-  const submitted  = grades.filter(g => g.status !== 'pending');
-  const avgMarks   = submitted.length > 0
+  const submitted = grades.filter(g => g.status !== 'pending');
+  const avgMarks  = submitted.length > 0
     ? parseFloat((submitted.reduce((s, g) => s + g.totalMarks, 0) / submitted.length).toFixed(1))
     : 0;
 
-  const distribution = { 'A+':0,'A':0,'A-':0,'B+':0,'B':0,'B-':0,'C+':0,'C':0,'C-':0,'D':0,'F':0,'I':0 };
-  for (const g of grades) distribution[g.letterGrade]++;
+  // Tanzania distribution
+  const distribution = { A: 0, 'B+': 0, B: 0, C: 0, D: 0, E: 0, I: 0 };
+  for (const g of grades) {
+    if (distribution[g.letterGrade] !== undefined) distribution[g.letterGrade]++;
+  }
 
-  res.json({ course, grades, stats: { avgMarks, distribution, total: grades.length } });
+  const supplementaryCount = distribution.D;
+  const failCount          = distribution.E;
+  const passCount          = distribution.A + distribution['B+'] + distribution.B + distribution.C;
+  const passRate           = grades.length > 0
+    ? parseFloat((passCount / grades.length * 100).toFixed(1))
+    : 0;
+
+  res.json({
+    course,
+    grades,
+    stats: {
+      avgMarks,
+      distribution,
+      total:             grades.length,
+      passCount,
+      passRate,
+      supplementaryCount,
+      failCount,
+    },
+    scale: GRADE_SCALE,
+  });
 });
 
 // @desc    Get my grades (student)
@@ -122,31 +179,48 @@ const getMyGrades = asyncHandler(async (req, res) => {
 
   const grades = await Grade.find({ student: student._id })
     .populate('course', 'title code credits semester year')
-    .sort({ academicYear: -1, semester: -1 });
+    .sort({ semester: 1 });
 
-  // GPA calculation
-  const approved     = grades.filter(g => g.status === 'approved' && g.letterGrade !== 'I');
-  let totalPoints    = 0;
-  let totalCredits   = 0;
+  const { gpa, totalCredits } = calcGPA(grades);
 
+  // Grade distribution
+  const dist = { A: 0, 'B+': 0, B: 0, C: 0, D: 0, E: 0 };
+  const approved = grades.filter(g => g.status === 'approved');
   for (const g of approved) {
-    const credits   = g.course?.credits || 0;
-    totalPoints    += g.gradePoints * credits;
-    totalCredits   += credits;
+    if (dist[g.letterGrade] !== undefined) dist[g.letterGrade]++;
   }
 
-  const gpa = totalCredits > 0
-    ? parseFloat((totalPoints / totalCredits).toFixed(2))
-    : 0;
+  // Supplementary / fail alerts
+  const supplementary = approved.filter(g => g.letterGrade === 'D');
+  const failed        = approved.filter(g => g.letterGrade === 'E');
 
-  // Group by academic year
-  const byYear = {};
+  // Group by semester for transcript view
+  const bySemester = {};
   for (const g of grades) {
-    if (!byYear[g.academicYear]) byYear[g.academicYear] = [];
-    byYear[g.academicYear].push(g);
+    const key = `Semester ${g.semester}`;
+    if (!bySemester[key]) bySemester[key] = [];
+    bySemester[key].push(g);
   }
 
-  res.json({ grades, gpa, totalCredits, byYear });
+  // Semester GPAs
+  const semesterGPAs = {};
+  for (const [sem, semGrades] of Object.entries(bySemester)) {
+    const { gpa: semGpa } = calcGPA(semGrades);
+    semesterGPAs[sem] = semGpa;
+  }
+
+  res.json({
+    grades,
+    gpa,
+    totalCredits,
+    gpaClass:      getGpaClass(gpa),
+    distribution:  dist,
+    supplementary,
+    failed,
+    bySemester,
+    semesterGPAs,
+    scale:         GRADE_SCALE,
+  });
 });
 
 // @desc    Approve grades
@@ -164,7 +238,7 @@ const approveGrades = asyncHandler(async (req, res) => {
     { status: 'approved' }
   );
 
-  // Update student GPAs
+  // Recalculate GPAs for affected students
   const grades = await Grade.find({
     course:       req.params.courseId,
     academicYear: academicYear || '2025/2026',
@@ -177,28 +251,13 @@ const approveGrades = asyncHandler(async (req, res) => {
       status:  'approved',
     }).populate('course', 'credits');
 
-    let totalPoints  = 0;
-    let totalCredits = 0;
-
-    for (const g of allGrades) {
-      const credits   = g.course?.credits || 0;
-      totalPoints    += g.gradePoints * credits;
-      totalCredits   += credits;
-    }
-
-    const gpa = totalCredits > 0
-      ? parseFloat((totalPoints / totalCredits).toFixed(2))
-      : 0;
-
-    await Student.findByIdAndUpdate(grade.student, {
-      gpa,
-      totalCredits,
-    });
+    const { gpa, totalCredits } = calcGPA(allGrades);
+    await Student.findByIdAndUpdate(grade.student, { gpa, totalCredits });
   }
 
   res.json({
     success: true,
-    message: `${updated.modifiedCount} grades approved`,
+    message: `${updated.modifiedCount} grades approved and GPAs updated`,
     count:    updated.modifiedCount,
   });
 });
@@ -228,4 +287,5 @@ module.exports = {
   getMyGrades,
   approveGrades,
   getStudentCourseGrade,
+  GRADE_SCALE,
 };
